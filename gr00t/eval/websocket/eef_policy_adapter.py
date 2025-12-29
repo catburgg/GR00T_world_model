@@ -7,8 +7,19 @@ import mujoco
 import numpy as np
 import robosuite.utils.transform_utils as T
 
-from gr00t.model.policy import Gr00tPolicy
+from gr00t.policy.gr00t_policy import Gr00tPolicy
 
+def rpy2mat(rpy):
+    roll, pitch, yaw = rpy[0], rpy[1], rpy[2]
+    cr, sr = np.cos(roll), np.sin(roll)
+    cp, sp = np.cos(pitch), np.sin(pitch)
+    cy, sy = np.cos(yaw), np.sin(yaw)
+
+    return np.array([
+        [cy*cp, cy*sp*sr - sy*cr, cy*sp*cr + sy*sr],
+        [sy*cp, sy*sp*sr + cy*cr, sy*sp*cr - cy*sr],
+        [-sp,   cp*sr,            cp*cr]
+    ])
 
 def remap_qpos(raw: np.ndarray, model: mujoco.MjModel) -> np.ndarray:
     """Remap qpos from observation format to model format."""
@@ -53,6 +64,7 @@ class EEFPolicyAdapter:
         self.robot_config = robot_config
 
         # IK-only soft-limit relaxation
+        self.site_transforms = robot_config["site_transforms"]
         self.ik_soft_limit_margin = robot_config["ik_soft_limit_margin"]
 
         # Sites
@@ -228,6 +240,7 @@ class EEFPolicyAdapter:
     def forward_kinematics(self, raw_qpos: np.ndarray) -> Dict[str, np.ndarray]:
         """Single-step FK: raw qpos (obs layout, 44) -> eef pose dict."""
         qpos = remap_qpos(raw_qpos, self.model)
+        print(qpos)
         self.data.qpos[:] = qpos
         mujoco.mj_forward(self.model, self.data)
 
@@ -235,9 +248,7 @@ class EEFPolicyAdapter:
         for name, sid in zip(self.site_names, self.site_ids):
             pos = self.data.site_xpos[sid].copy()
             rot = self.data.site_xmat[sid].reshape(3, 3).copy()
-
-            quat_wxyz = np.zeros(4, dtype=float)
-            mujoco.mju_mat2Quat(quat_wxyz, rot.flatten())
+            rot = rot @ self.site_transforms[name][:3, :3]
 
             R = np.clip(rot, -1.0, 1.0)
             yaw = np.arctan2(R[1, 0], R[0, 0])
@@ -247,46 +258,10 @@ class EEFPolicyAdapter:
 
             arm_name = "left" if "left" in name.lower() else "right"
             eef_poses[f"{arm_name}_eef_pos"] = pos
-            eef_poses[f"{arm_name}_eef_quat_wxyz"] = quat_wxyz
             eef_poses[f"{arm_name}_eef_rpy"] = rpy
 
         return eef_poses
 
-    def inverse_kinematics(
-        self,
-        target_eef_poses: Dict[str, np.ndarray],
-        current_qpos: Optional[np.ndarray] = None,
-    ) -> np.ndarray:
-        """Single-step IK: eef pose dict -> controlled joint qpos (len(_qpos_adr))."""
-        target_action: List[float] = []
-
-        for site_name in self.site_names:
-            arm_name = "left" if "left" in site_name.lower() else "right"
-
-            target_pos = np.asarray(target_eef_poses[f"{arm_name}_eef_pos"], dtype=float)
-            target_quat_wxyz = np.asarray(target_eef_poses[f"{arm_name}_eef_quat_wxyz"], dtype=float)
-
-            target_action.extend(target_pos.tolist())
-            target_action.extend(target_quat_wxyz.tolist())
-
-        target_action_np = np.asarray(target_action, dtype=float)
-
-        if current_qpos is not None:
-            remapped_current = remap_qpos(current_qpos, self.model)
-            self.data.qpos[:] = remapped_current
-            mujoco.mj_forward(self.model, self.data)
-            self.ik_solver.q0 = remapped_current[self._qpos_adr].copy()
-
-        q_des = self.ik_solver.solve(target_action_np, Kpos=0.95, Kori=0.95)
-
-        qfull = self.data.qpos.copy()
-        qfull[self._qpos_adr] = q_des
-        self.data.qpos[:] = qfull
-        mujoco.mj_forward(self.model, self.data)
-
-        return q_des
-
-    # ---- Batch helpers (assume all tensors are (B, N, D)) ----
     def forward_kinematics_batch(self, raw_qpos_bn: np.ndarray) -> Dict[str, np.ndarray]:
         """FK for raw_qpos shaped (B,N,44)."""
         raw = np.asarray(raw_qpos_bn)
@@ -297,8 +272,6 @@ class EEFPolicyAdapter:
         out = {
             "left_eef_pos": np.zeros((B, N, 3), dtype=float),
             "right_eef_pos": np.zeros((B, N, 3), dtype=float),
-            "left_eef_quat_wxyz": np.zeros((B, N, 4), dtype=float),
-            "right_eef_quat_wxyz": np.zeros((B, N, 4), dtype=float),
             "left_eef_rpy": np.zeros((B, N, 3), dtype=float),
             "right_eef_rpy": np.zeros((B, N, 3), dtype=float),
         }
@@ -308,8 +281,6 @@ class EEFPolicyAdapter:
                 eef = self.forward_kinematics(raw[b, n])
                 out["left_eef_pos"][b, n] = eef["left_eef_pos"]
                 out["right_eef_pos"][b, n] = eef["right_eef_pos"]
-                out["left_eef_quat_wxyz"][b, n] = eef["left_eef_quat_wxyz"]
-                out["right_eef_quat_wxyz"][b, n] = eef["right_eef_quat_wxyz"]
                 out["left_eef_rpy"][b, n] = eef["left_eef_rpy"]
                 out["right_eef_rpy"][b, n] = eef["right_eef_rpy"]
 
@@ -336,11 +307,105 @@ class EEFPolicyAdapter:
                 poses = {
                     "left_eef_pos": np.asarray(target_eef_poses_bn["left_eef_pos"][b, n], dtype=float),
                     "right_eef_pos": np.asarray(target_eef_poses_bn["right_eef_pos"][b, n], dtype=float),
-                    "left_eef_quat_wxyz": np.asarray(target_eef_poses_bn["left_eef_quat_wxyz"][b, n], dtype=float),
-                    "right_eef_quat_wxyz": np.asarray(target_eef_poses_bn["right_eef_quat_wxyz"][b, n], dtype=float),
+                    "left_eef_rpy": np.asarray(target_eef_poses_bn["left_eef_rpy"][b, n], dtype=float),
+                    "right_eef_rpy": np.asarray(target_eef_poses_bn["right_eef_rpy"][b, n], dtype=float),
                 }
 
                 cur1 = None if cur is None else cur[b, n]
-                q_out[b, n] = self.inverse_kinematics(poses, current_qpos=cur1)
+                q_out[b, n] = self.inverse_kinematics_iter(poses, current_qpos=cur1)
 
         return q_out
+
+    def _build_target_action_from_rpy(self, target_eef_poses: Dict[str, np.ndarray]) -> np.ndarray:
+        """Build solver target_action (pos + quat_wxyz per site) from dict that stores rpy."""
+        target_action: List[float] = []
+
+        for site_name in self.site_names:
+            arm_name = "left" if "left" in site_name.lower() else "right"
+
+            target_pos = np.asarray(target_eef_poses[f"{arm_name}_eef_pos"], dtype=float)
+            target_rpy = np.asarray(target_eef_poses[f"{arm_name}_eef_rpy"], dtype=float)
+
+            # Map adjusted-frame rotation back to MuJoCo site rotation:
+            # R_site = R_adj @ inv(R_Tadj)
+            R_adj = rpy2mat(target_rpy)
+            R_Tadj = np.asarray(self.site_transforms[site_name][:3, :3], dtype=float)
+            R_site = R_adj @ np.linalg.inv(R_Tadj)
+
+            # robosuite T.mat2quat expects 3x3 and returns xyzw
+            q_xyzw = T.mat2quat(R_site)
+            q_wxyz = np.roll(q_xyzw, 1)
+
+            target_action.extend(target_pos.tolist())
+            target_action.extend(q_wxyz.tolist())
+
+        return np.asarray(target_action, dtype=float)
+
+    def _eef_errors_current(self, target_eef_poses: Dict[str, np.ndarray]) -> tuple[float, float]:
+        """Return (pos_err_max, rot_err_max) for current self.data state vs target dict (rpy)."""
+        pos_err_max = 0.0
+        rot_err_max = 0.0
+
+        for site_name, sid in zip(self.site_names, self.site_ids):
+            arm_name = "left" if "left" in site_name.lower() else "right"
+
+            # position error
+            p_t = np.asarray(target_eef_poses[f"{arm_name}_eef_pos"], dtype=float)
+            p_c = self.data.site_xpos[sid].copy()
+            pos_err_max = max(pos_err_max, float(np.linalg.norm(p_t - p_c)))
+
+            # rotation error (in adjusted frame)
+            rpy_t = np.asarray(target_eef_poses[f"{arm_name}_eef_rpy"], dtype=float)
+            R_t = rpy2mat(rpy_t)
+
+            R_site = self.data.site_xmat[sid].reshape(3, 3).copy()
+            R_adj = np.asarray(self.site_transforms[site_name][:3, :3], dtype=float)
+            R_c = R_site @ R_adj
+
+            R_err = R_t.T @ R_c
+            cosang = np.clip((np.trace(R_err) - 1.0) / 2.0, -1.0, 1.0)
+            rot_err = float(np.arccos(cosang))
+            rot_err_max = max(rot_err_max, rot_err)
+
+        return pos_err_max, rot_err_max
+
+    def inverse_kinematics_iter(
+        self,
+        target_eef_poses: Dict[str, np.ndarray],
+        current_qpos: Optional[np.ndarray] = None,
+        *,
+        max_iters: int = 50,
+        pos_tol: float = 1e-4,
+        rot_tol: float = 1e-3,
+        verbose: bool = True,
+    ) -> np.ndarray:
+        if current_qpos is None:
+            raise ValueError("inverse_kinematics_iter requires current_qpos (obs layout).")
+
+        # init state
+        qfull = remap_qpos(current_qpos, self.model)
+        self.data.qpos[:] = qfull
+        mujoco.mj_forward(self.model, self.data)
+        self.ik_solver.q0 = qfull[self._qpos_adr].copy()
+
+        target_action_np = self._build_target_action_from_rpy(target_eef_poses)
+
+        q_des = qfull[self._qpos_adr].copy()
+        for it in range(int(max_iters)):
+            # make sure solver sees latest state
+            mujoco.mj_forward(self.model, self.data)
+
+            q_des = self.ik_solver.solve(target_action_np, Kpos=0.95, Kori=0.95)
+
+            qfull = self.data.qpos.copy()
+            qfull[self._qpos_adr] = q_des
+            self.data.qpos[:] = qfull
+            mujoco.mj_forward(self.model, self.data)
+
+            pos_err, rot_err = self._eef_errors_current(target_eef_poses)
+            if verbose:
+                print(f"[IK it={it:02d}] pos_err={pos_err:.6e} rot_err={rot_err:.6e}")
+            if pos_err <= pos_tol and rot_err <= rot_tol:
+                break
+
+        return q_des
