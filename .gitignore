@@ -113,6 +113,75 @@ dist
 wandb
 
 # Playground
+# Virtual environments
+.venv/
+.venv/*
+env/
+venv/
+
+# Mujoco
+MUJOCO_LOG.TXT
+# python
+
+*.pyc
+*.pyo
+__pycache__
+
+
+# testing and continuous integration
+
+.coverage
+.pytest_cache/
+.benchmarks
+
+# documentation build artifacts
+
+docs/build
+site/
+
+# The following ignores are from vila repository
+*.whl
+*_dev
+dev/
+# config.json
+eval_output/
+eval-result/
+hostfile
+core.*
+*.out
+captioner_bk/
+slurm-logs/
+captioner/
+hostfile
+*_dev.py
+*_dev.sh
+
+
+# Python
+__pycache__
+*.pyc
+*.egg-info
+dist
+
+# Log
+*.log
+*.log.*
+
+# Data
+!**/alpaca-data-conversation.json
+
+# Model
+models/
+
+# Editor
+.idea
+*.swp
+
+# Other
+.DS_Store
+wandb
+
+# Playground
 playground/
 
 # Hydra 

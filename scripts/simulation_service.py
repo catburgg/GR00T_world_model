@@ -25,6 +25,7 @@ from gr00t.eval.simulation import (
     VideoConfig,
 )
 from gr00t.model.policy import Gr00tPolicy
+from gr00t.eval.websocket.client import WebsocketClientPolicy
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -66,6 +67,7 @@ if __name__ == "__main__":
     parser.add_argument("--server", action="store_true", help="Run the server.")
     # client mode
     parser.add_argument("--client", action="store_true", help="Run the client")
+    parser.add_argument("--websocket", action="store_true", help="Use WebSocket client instead of ZMQ")
     args = parser.parse_args()
 
     if args.server:
@@ -80,8 +82,13 @@ if __name__ == "__main__":
         server.run()
 
     elif args.client:
-        # Create a simulation client
-        simulation_client = SimulationInferenceClient(host=args.host, port=args.port)
+        if args.websocket:
+            # Use WebSocket client
+            from gr00t.eval.websocket.websocket_simulation_client import WebSocketSimulationClient
+            simulation_client = WebSocketSimulationClient(host=args.host, port=args.port)
+        else:
+            # Use original ZMQ client
+            simulation_client = SimulationInferenceClient(host=args.host, port=args.port)
 
         print("Available modality configs:")
         modality_config = simulation_client.get_modality_config()

@@ -38,25 +38,13 @@ HTTP Client Usage (assuming a server running on 0.0.0.0:8000):
 
 You can use bore to forward the port to your client: `159.223.171.199` is bore.pub.
     bore local 8000 --to 159.223.171.199
-
-3. TensorRT Support:
-
-For accelerated inference using TensorRT, first build the TensorRT engines using the deployment scripts,
-then run the server with the --use-tensorrt flag:
-
-TensorRT Server Usage:
-    python scripts/inference_service.py --server --use-tensorrt --trt-engine-path gr00t_engine
-
-TensorRT HTTP Server Usage:
-    python scripts/inference_service.py --server --http-server --use-tensorrt --trt-engine-path gr00t_engine --port 8000
-
-Note: TensorRT engines must be built before running with --use-tensorrt flag.
-See deployment_scripts/README.md for instructions on building TensorRT engines.
 """
 
 import time
+import json
+
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, Optional
 
 import numpy as np
 import tyro
@@ -105,21 +93,9 @@ class ArgsConfig:
 
     http_server: bool = False
     """Whether to run it as HTTP server. Default is ZMQ server."""
-
-    use_tensorrt: bool = False
-    """Whether to use TensorRT for inference. Requires TensorRT engines to be built."""
-
-    trt_engine_path: str = "gr00t_engine"
-    """Path to the TensorRT engine directory. Only used when use_tensorrt is True."""
-
-    vit_dtype: Literal["fp16", "fp8"] = "fp8"
-    """ViT model dtype (fp16, fp8). Only used when use_tensorrt is True."""
-
-    llm_dtype: Literal["fp16", "nvfp4", "fp8"] = "nvfp4"
-    """LLM model dtype (fp16, nvfp4, fp8). Only used when use_tensorrt is True."""
-
-    dit_dtype: Literal["fp16", "fp8"] = "fp8"
-    """DiT model dtype (fp16, fp8). Only used when use_tensorrt is True."""
+    
+    websocket_server: bool = False
+    """Whether to run it as WebSocket server."""
 
 
 #####################################################################################
@@ -166,20 +142,30 @@ def _example_http_client_call(obs: dict, host: str, port: int, api_token: str):
         print(f"Error: {response.status_code} - {response.text}")
         return {}
 
+def _example_websocket_client_call(obs: dict, host: str, port: int, api_token: str):
+    """Example WebSocket client call to the server."""
+    from gr00t.eval.websocket.client import WebsocketClientPolicy
+    
+    print("Testing WebSocket server...")
+    
+    # Create WebSocket client
+    client = WebsocketClientPolicy(host=host, port=port)
+    
+    # Get server metadata
+    print("Server metadata:")
+    metadata = client.get_server_metadata()
+    print(metadata)
+    
+    # Get action
+    time_start = time.time()
+    action = client.infer([obs])  # WebSocket expects list of observations
+    print(f"Total time taken to get action from WebSocket server: {time.time() - time_start} seconds")
+    
+    return action
+
 
 def main(args: ArgsConfig):
     if args.server:
-        # Create a policy
-        # The `Gr00tPolicy` class is being used to create a policy object that encapsulates
-        # the model path, transform name, embodiment tag, and denoising steps for the robot
-        # inference system. This policy object is then utilized in the server mode to start
-        # the Robot Inference Server for making predictions based on the specified model and
-        # configuration.
-
-        # we will use an existing data config to create the modality config and transform
-        # if a new data config is specified, this expect user to
-        # construct your own modality config and transform
-        # see gr00t/utils/data.py for more details
         data_config = load_data_config(args.data_config)
         modality_config = data_config.modality_config()
         modality_transform = data_config.transform()
@@ -192,19 +178,6 @@ def main(args: ArgsConfig):
             denoising_steps=args.denoising_steps,
         )
 
-        # Setup TensorRT if requested
-        if args.use_tensorrt:
-            print(f"Setting up TensorRT engines from: {args.trt_engine_path}")
-            print(f"  ViT dtype: {args.vit_dtype}")
-            print(f"  LLM dtype: {args.llm_dtype}")
-            print(f"  DiT dtype: {args.dit_dtype}")
-            from deployment_scripts.trt_model_forward import setup_tensorrt_engines
-
-            setup_tensorrt_engines(
-                policy, args.trt_engine_path, args.vit_dtype, args.llm_dtype, args.dit_dtype
-            )
-            print("TensorRT engines loaded successfully!")
-
         # Start the server
         if args.http_server:
             from gr00t.eval.http_server import HTTPInferenceServer  # noqa: F401
@@ -213,6 +186,28 @@ def main(args: ArgsConfig):
                 policy, port=args.port, host=args.host, api_token=args.api_token
             )
             server.run()
+        elif args.websocket_server:
+            from gr00t.eval.websocket.server import WebsocketPolicyServer
+            from gr00t.eval.websocket.policy_adapter import Gr00tPolicyAdapter
+            
+            print(f"Starting WebSocket server on {args.host}:{args.port}")
+            
+            # Wrap policy with adapter
+            adapted_policy = Gr00tPolicyAdapter(policy)
+            
+            # Create and start WebSocket server
+            server = WebsocketPolicyServer(
+                policy=adapted_policy,
+                host=args.host,
+                port=args.port,
+                metadata={
+                    "model_path": args.model_path,
+                    "embodiment_tag": args.embodiment_tag,
+                    "data_config": args.data_config,
+                    "modality_config": {k: str(v) for k, v in modality_config.items()}
+                }
+            )
+            server.serve_forever()
         else:
             server = RobotInferenceServer(policy, port=args.port, api_token=args.api_token)
             server.run()
@@ -245,7 +240,9 @@ def main(args: ArgsConfig):
             "annotation.human.action.task_description": ["do your thing!"],
         }
 
-        if args.http_server:
+        if args.websocket_server:
+            action = _example_websocket_client_call(obs, args.host, args.port, args.api_token)
+        elif args.http_server:
             action = _example_http_client_call(obs, args.host, args.port, args.api_token)
         else:
             action = _example_zmq_client_call(obs, args.host, args.port, args.api_token)
