@@ -43,6 +43,25 @@ Here is the general procedure to use GR00T N1.6:
 6. Our repo provides convenient scripts to run academic simulation benchmarks with finetuned checkpoints (see [LIBERO](examples/LIBERO/README.md), [SimplerEnv](examples/SimplerEnv/README.md), [RoboCasa](examples/robocasa/README.md)).
 7. The user will need to connect the `Gr00tPolicy` to the robot controller to execute actions on their target hardware.
 
+## How to run evalutation
+
+server:
+```bash
+python scripts/inference_service.py --server --websocket_server \
+    --model_path nvidia/GR00T-N1.5-3B \
+    --data_config fourier_gr1_arms_waist
+```
+
+client:
+```bash
+python scripts/simulation_service.py --client --websocket \
+    --env_name gr1_unified/PosttrainPnPNovelFromTrayToTieredbasketSplitA_GR1ArmsAndWaistFourierHands_Env \
+    --video_dir ./videos \
+    --max_episode_steps 720 \
+    --n_envs 5 \
+    --n_episodes 10
+```
+
 ## What's New in GR00T N1.6
 
 GR00T N1.6 represents a significant upgrade over GR00T N1.5, with improvements in both model architecture and data leading to better performance in many aspects.
