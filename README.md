@@ -45,6 +45,8 @@ Here is the general procedure to use GR00T N1.6:
 
 ## How to run evalutation
 
+测试单个任务：
+
 server:
 ```bash
 python scripts/inference_service.py --server --websocket_server \
@@ -60,6 +62,13 @@ python scripts/simulation_service.py --client --websocket \
     --max_episode_steps 720 \
     --n_envs 5 \
     --n_episodes 10
+```
+
+测试所有任务：
+
+在 client 侧跑：
+```bash
+bash scripts/eval.sh
 ```
 
 ## What's New in GR00T N1.6
