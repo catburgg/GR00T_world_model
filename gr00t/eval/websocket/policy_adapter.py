@@ -7,7 +7,7 @@ import torch
 from PIL import Image
 import mujoco
 
-from gr00t.model.policy import Gr00tPolicy
+from gr00t.policy.gr00t_policy import Gr00tPolicy
 from gr00t.eval.websocket.eef_policy_adapter import remap_qpos
 
 
