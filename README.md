@@ -63,7 +63,26 @@ Here is the general procedure to use GR00T N1.5:
 4. Our repo provides convenient scripts for finetuning the pre-trained GR00T N1.5 model on user's data, and running inference.
 5. The user will connect the `Gr00tPolicy` to the robot controller to execute actions on their target hardware.
 
-## What's New in GR00T N1.5
+## How to run evalutation
+
+server:
+```bash
+python scripts/inference_service.py --server --websocket_server \
+    --model_path nvidia/GR00T-N1.5-3B \
+    --data_config fourier_gr1_arms_waist
+```
+
+client:
+```bash
+python scripts/simulation_service.py --client --websocket \
+    --env_name gr1_unified/PosttrainPnPNovelFromTrayToTieredbasketSplitA_GR1ArmsAndWaistFourierHands_Env \
+    --video_dir ./videos \
+    --max_episode_steps 720 \
+    --n_envs 5 \
+    --n_episodes 10
+```
+
+## What's New in GR00T N1.6
 
 GR00T N1.5 represents a significant upgrade over GR00T N1, with improvements in both model architecture and data leading to better performance in many aspects.
 
