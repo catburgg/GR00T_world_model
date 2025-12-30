@@ -131,12 +131,16 @@ def test_batch_fk_ik_interfaces():
     
     # 3) Write IK result back to MuJoCo and compute reached pose
     remapped = remap_qpos(raw_qpos, model)
-    print(remapped)
+    # print(remapped)
     data.qpos[:] = remapped
     mujoco.mj_forward(model, data)
 
     qfull = data.qpos.copy()
     qfull[np.asarray(adapter._qpos_adr, dtype=int)] = q_des_bn[0, 0]
+    print(adapter._qpos_adr)
+    for i in range(model.njnt):
+        name = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_JOINT, i)
+        print(name, qfull[i])
     data.qpos[:] = qfull
     mujoco.mj_forward(model, data)
 
