@@ -237,10 +237,10 @@ class EEFPolicyAdapter:
 
         self.ik_solver.solve = _solve_patched
 
-    def forward_kinematics(self, raw_qpos: np.ndarray) -> Dict[str, np.ndarray]:
+    def forward_kinematics(self, qpos: np.ndarray) -> Dict[str, np.ndarray]:
         """Single-step FK: raw qpos (obs layout, 44) -> eef pose dict."""
-        qpos = remap_qpos(raw_qpos, self.model)
-        print(qpos)
+        # qpos = remap_qpos(raw_qpos, self.model)
+        # print(qpos)
         self.data.qpos[:] = qpos
         mujoco.mj_forward(self.model, self.data)
 
@@ -383,7 +383,8 @@ class EEFPolicyAdapter:
             raise ValueError("inverse_kinematics_iter requires current_qpos (obs layout).")
 
         # init state
-        qfull = remap_qpos(current_qpos, self.model)
+        # qfull = remap_qpos(current_qpos, self.model)
+        qfull = current_qpos.copy()
         self.data.qpos[:] = qfull
         mujoco.mj_forward(self.model, self.data)
         self.ik_solver.q0 = qfull[self._qpos_adr].copy()
