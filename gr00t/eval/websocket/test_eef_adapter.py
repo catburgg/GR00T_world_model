@@ -15,7 +15,7 @@ EEF_SITES = ["left_eef_site", "right_eef_site"]
 
 def load_qpos(path: str) -> np.ndarray:
     frame = pd.read_parquet(path)
-    return np.asarray(frame["observation.state"][0], dtype=np.float64)
+    return np.asarray(frame["observation.state"][0], dtype=np.float64), np.asarray(frame["observation.state"][1], dtype=np.float64)
 
 
 def joint_qpos_dim(joint_type: int) -> int:
@@ -119,28 +119,39 @@ def test_batch_fk_ik_interfaces():
     )
 
     # raw qpos (observation layout)
-    raw_qpos = load_qpos(PARQUET_PATH)  # (44,)
-    raw_qpos_bn = raw_qpos.reshape(1, 1, -1)  # (1,1,44)
+    raw_qpos, nxt_qpos = load_qpos(PARQUET_PATH)  # (44,)
 
-    # 1) batch FK
+    # 1) Write IK result back to MuJoCo and compute reached pose
+    remapped = remap_qpos(raw_qpos, model)
+    nxt_remapped = remap_qpos(nxt_qpos, model)
+    raw_qpos_bn = remapped.reshape(1, 1, -1)  # (1,1,44)
+    nxt_qpos_bn = nxt_remapped.reshape(1, 1, -1)  # (1,1,44)
+    
+    # 2) batch FK
     eef_bn = adapter.forward_kinematics_batch(raw_qpos_bn)
     print(eef_bn)
-
-    # 2) batch IK (use same raw as current_qpos)
-    q_des_bn = adapter.inverse_kinematics_batch(eef_bn, current_qpos_bn=raw_qpos_bn)
     
-    # 3) Write IK result back to MuJoCo and compute reached pose
-    remapped = remap_qpos(raw_qpos, model)
+    nxt_eef_bn = adapter.forward_kinematics_batch(nxt_qpos_bn)
+    print(nxt_eef_bn)
+
+    # 3) batch IK (use same raw as current_qpos)
+    q_des_bn = adapter.inverse_kinematics_batch(eef_bn, current_qpos_bn=raw_qpos_bn)
+    nxt_q_des_bn = adapter.inverse_kinematics_batch(nxt_eef_bn, current_qpos_bn=raw_qpos_bn)
+    
     # print(remapped)
     data.qpos[:] = remapped
     mujoco.mj_forward(model, data)
 
     qfull = data.qpos.copy()
     qfull[np.asarray(adapter._qpos_adr, dtype=int)] = q_des_bn[0, 0]
+    nxt_qfull = qfull.copy()
+    nxt_qfull[np.asarray(adapter._qpos_adr, dtype=int)] = nxt_q_des_bn[0, 0]
     print(adapter._qpos_adr)
     for i in range(model.njnt):
         name = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_JOINT, i)
-        print(name, qfull[i])
+        print(name, qfull[i], remapped[i])
+        print(name, nxt_qfull[i], nxt_remapped[i])
+    print(adapter.forward_kinematics_batch(nxt_qpos_bn.reshape(1, 1, -1)), adapter.forward_kinematics_batch(nxt_qfull.reshape(1, 1, -1)))
     data.qpos[:] = qfull
     mujoco.mj_forward(model, data)
 
