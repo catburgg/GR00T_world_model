@@ -52,7 +52,7 @@ LE_ROBOT_MODALITY_FILENAME = "meta/modality.json"
 LE_ROBOT_EPISODE_FILENAME = "meta/episodes.jsonl"
 LE_ROBOT_TASKS_FILENAME = "meta/tasks.jsonl"
 LE_ROBOT_INFO_FILENAME = "meta/info.json"
-LE_ROBOT_STATS_FILENAME = "meta/stats.json"
+LE_ROBOT_STATS_FILENAME = "meta/stats_gr00t.json"
 LE_ROBOT_DATA_FILENAME = "data/*/*.parquet"
 
 
@@ -1081,12 +1081,17 @@ class LeRobotMixtureDataset(Dataset):
         self.epoch = epoch
         # self.sampled_steps = self.sample_epoch()
 
-    def sample_step(self, index: int) -> tuple[LeRobotSingleDataset, int, int]:
-        """Sample a single step from the dataset."""
+    def sample_step(self, index: int, retry_offset: int = 0) -> tuple[LeRobotSingleDataset, int, int]:
         # return self.sampled_steps[index]
 
-        # Set seed
-        seed = index if self.mode != "train" else safe_hash((self.epoch, index, self.seed))
+        # Set seed (include retry_offset to get different samples on retry)
+        if self.mode == "train":
+            if retry_offset > 0:
+                seed = safe_hash((self.epoch, index, self.seed, retry_offset))
+            else:
+                seed = safe_hash((self.epoch, index, self.seed))
+        else:
+            seed = index + retry_offset * 1000000
         rng = np.random.default_rng(seed)
 
         # Sample dataset
@@ -1112,8 +1117,23 @@ class LeRobotMixtureDataset(Dataset):
         Returns:
             dict: The data for the trajectory and start index.
         """
-        dataset, trajectory_name, step = self.sample_step(index)
-        return dataset.transforms(dataset.get_step_data(trajectory_name, step))
+        max_retries = 5
+        for retry in range(max_retries):
+            try:
+                dataset, trajectory_name, step = self.sample_step(index, retry_offset=retry)
+                return dataset.transforms(dataset.get_step_data(trajectory_name, step))
+            except ValueError as e:
+                error_msg = str(e)
+                if "Could not open input file" in error_msg or "Invalid data found when processing input" in error_msg:
+                    if retry < max_retries - 1:
+                        continue
+                    else:
+                        import warnings
+                        warnings.warn(f"Failed to load video after {max_retries} retries. Error: {error_msg}")
+                        raise
+                else:
+                    raise
+        raise RuntimeError(f"Failed to get item after {max_retries} retries")
 
     def __len__(self) -> int:
         """Get the length of a single epoch in the mixture.

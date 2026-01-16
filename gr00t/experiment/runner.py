@@ -156,7 +156,9 @@ class TrainRunner:
         trainer.add_callback(ckpt_format_callback)
 
         # Log dataloader information
+        print("Creating train dataloader...", flush=True)
         train_dl_len = len(trainer.get_train_dataloader())
+        print(f"Train dataloader created successfully, length: {train_dl_len}", flush=True)
         # eval_dl_len = len(trainer.get_eval_dataloader()) # @note (k2): How to manage eval dataloader?
 
         print(
@@ -170,6 +172,7 @@ class TrainRunner:
 
     def train(self):
         # Start training
+        print("Starting training...", flush=True)
         self.trainer.train(resume_from_checkpoint=self.resume_from_checkpoint)
         self.trainer.save_state()
 

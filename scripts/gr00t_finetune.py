@@ -116,6 +116,15 @@ class ArgsConfig:
     dataloader_prefetch_factor: int = 4
     """Prefetch factor for data loading."""
 
+    gradient_checkpointing: bool = False
+    """Whether to enable gradient checkpointing to save memory."""
+
+    use_deepspeed: bool = True
+    """Whether to use DeepSpeed ZeRO for memory optimization."""
+
+    deepspeed_config_path: str = "deepspeed_zero2.json"
+    """Path to DeepSpeed configuration file."""
+
     report_to: Literal["wandb", "tensorboard", "azure_ml"] = "wandb"
     """Where to report training metrics (e.g., 'wandb', 'tensorboard', 'azure_ml')."""
 
@@ -333,6 +342,13 @@ def main(config: ArgsConfig):
     model.compute_dtype = "bfloat16"
     model.config.compute_dtype = "bfloat16"
 
+    if config.gradient_checkpointing:
+        if hasattr(model.backbone, "language_model") and hasattr(model.backbone.language_model, "config"):
+            model.backbone.language_model.config.use_cache = False
+        if hasattr(model.backbone, "language_model") and hasattr(model.backbone.language_model, "enable_input_require_grads"):
+            model.backbone.language_model.enable_input_require_grads()
+        print("Gradient checkpointing enabled - model configured for memory optimization")
+
     if config.lora_rank > 0:
         model = get_lora_model(
             model,
@@ -343,12 +359,16 @@ def main(config: ArgsConfig):
         )
 
     # 2.1 modify training args
+    os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    deepspeed_config = os.path.join(script_dir, config.deepspeed_config_path)
+
     training_args = TrainingArguments(
         output_dir=config.output_dir,
         run_name=None,
         remove_unused_columns=False,
-        deepspeed="",
-        gradient_checkpointing=False,
+        deepspeed=deepspeed_config,
+        gradient_checkpointing=config.gradient_checkpointing,
         bf16=True,
         tf32=True,
         per_device_train_batch_size=config.batch_size,
@@ -433,7 +453,9 @@ if __name__ == "__main__":
             # Use subprocess.run instead of os.system
             raw_args_list = sys.argv[1:]
             cmd = [
-                "torchrun",
+                sys.executable,
+                "-m",
+                "torch.distributed.run",
                 "--standalone",
                 f"--nproc_per_node={config.num_gpus}",
                 "--nnodes=1",  # default to 1 node for now

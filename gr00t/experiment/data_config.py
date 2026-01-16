@@ -342,6 +342,52 @@ class UnitreeG1FullBodyDataConfig(UnitreeG1DataConfig):
     action_indices = list(range(16))
 
 
+class GalbotDataConfig(BaseDataConfig):
+    video_keys = ["video.front_head_left"]
+    state_keys = ["state.qpos"]
+    action_keys = ["action.qpos"]  # Action uses state data via original_key in modality.json
+    language_keys = ["annotation.language.action_text"]
+    observation_indices = [0]
+    action_indices = list(range(16))  # Use state indices [0, 1, ..., 15] as action
+
+    
+    def transform(self) -> ModalityTransform:
+        transforms = [
+            # video transforms (uncommented - needed for training)
+            VideoToTensor(apply_to=self.video_keys),
+            VideoCrop(apply_to=self.video_keys, scale=0.95),
+            VideoColorJitter(
+                apply_to=self.video_keys,
+                brightness=0.3,
+                contrast=0.4,
+                saturation=0.5,
+                hue=0.08,
+            ),
+            VideoToNumpy(apply_to=self.video_keys),
+            StateActionToTensor(apply_to=self.state_keys),
+            StateActionTransform(
+                apply_to=self.state_keys,
+                normalization_modes={key: "min_max" for key in self.state_keys},
+            ),
+            StateActionToTensor(apply_to=self.action_keys),
+            StateActionTransform(
+                apply_to=self.action_keys,
+                normalization_modes={key: "min_max" for key in self.action_keys},
+            ),
+            ConcatTransform(
+                video_concat_order=self.video_keys,
+                state_concat_order=self.state_keys,
+                action_concat_order=self.action_keys,
+            ),
+            # model-specific transform (required)
+            GR00TTransform(
+                state_horizon=len(self.observation_indices),
+                action_horizon=len(self.action_indices),
+                max_state_dim=64,
+                max_action_dim=32,
+            ),
+        ]
+        return ComposedModalityTransform(transforms=transforms)
 ###########################################################################################
 
 
@@ -783,6 +829,7 @@ DATA_CONFIG_MAP = {
     "so100_dualcam": So100DualCamDataConfig(),
     "unitree_g1": UnitreeG1DataConfig(),
     "unitree_g1_full_body": UnitreeG1FullBodyDataConfig(),
+    "galbot": GalbotDataConfig(),
     "oxe_droid": OxeDroidDataConfig(),
     "agibot_genie1": AgibotGenie1DataConfig(),
 }
