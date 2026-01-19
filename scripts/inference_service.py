@@ -173,9 +173,8 @@ def main(args: ArgsConfig):
         # Only create a real GR00T model when we actually need it.
         # For replay over websocket, we don't want to load the model.
         policy = None
-        if not args.websocket_server:
+        if not args.replay:
             from gr00t.model.policy import Gr00tPolicy  # local import to avoid heavy deps unless needed
-
             policy = Gr00tPolicy(
                 model_path=args.model_path,
                 modality_config=modality_config,
@@ -183,6 +182,27 @@ def main(args: ArgsConfig):
                 embodiment_tag=args.embodiment_tag,
                 denoising_steps=args.denoising_steps,
             )
+        else:
+            PARQUET_PATH = "/mnt/project/world_model/data/RobotData/robocasa_1k_20hz/gr1_unified.PnPBottleToCabinetClose_GR1ArmsAndWaistFourierHands_1000/data/chunk-000/episode_000000.parquet"
+            MODALITY_JSON_PATH = "/mnt/project/world_model/data/RobotData/robocasa_1k_20hz/gr1_unified.PnPBottleToCabinetClose_GR1ArmsAndWaistFourierHands_1000/meta/modality.json"
+            USE_EEF_REPLAY = True
+
+            if USE_EEF_REPLAY:
+                policy = EEFReplayPolicyAdapter(
+                    parquet_path=PARQUET_PATH,
+                    modality_json_path=MODALITY_JSON_PATH,
+                    eef_target_offset=0,
+                    robot_xml_path=None,
+                )
+            else:
+                policy = DummyReplayPolicyAdapter(
+                    parquet_path=PARQUET_PATH,
+                    modality_json_path=MODALITY_JSON_PATH,
+                    action_horizon=1,
+                    start_index=0,
+                )
+
+        
 
         # Start the server
         if args.http_server:
@@ -197,38 +217,19 @@ def main(args: ArgsConfig):
             from gr00t.eval.websocket.server import WebsocketPolicyServer
             from gr00t.eval.websocket.dummy_replay_adapter import DummyReplayPolicyAdapter
             from gr00t.eval.websocket.eef_replay_adapter import EEFReplayPolicyAdapter
+            from gr00t.eval.websocket.policy_adapter import Gr00tPolicyAdapter, GalbotPolicyAdapter
             
             print(f"Starting WebSocket server on {args.host}:{args.port}")
 
-            # ------------------------------------------------------------
-            # Hard-coded replay policy (edit these paths for your dataset)
-            # ------------------------------------------------------------
-            PARQUET_PATH = "/mnt/project/world_model/data/RobotData/robocasa_1k_20hz/gr1_unified.PnPBottleToCabinetClose_GR1ArmsAndWaistFourierHands_1000/data/chunk-000/episode_000000.parquet"
-            MODALITY_JSON_PATH = "/mnt/project/world_model/data/RobotData/robocasa_1k_20hz/gr1_unified.PnPBottleToCabinetClose_GR1ArmsAndWaistFourierHands_1000/meta/modality.json"
-
-            # Choose ONE:
-            USE_EEF_REPLAY = True
-
-            if USE_EEF_REPLAY:
-                adapted_policy = EEFReplayPolicyAdapter(
-                    parquet_path=PARQUET_PATH,
-                    modality_json_path=MODALITY_JSON_PATH,
-                    # If your eef target should come from row t+1, set to 1.
-                    eef_target_offset=0,
-                    # Optional: override robot xml if needed
-                    robot_xml_path=None,
-                )
-            else:
-                adapted_policy = DummyReplayPolicyAdapter(
-                    parquet_path=PARQUET_PATH,
-                    modality_json_path=MODALITY_JSON_PATH,
-                    action_horizon=1,
-                    start_index=0,
-                )
+            if policy is not None and hasattr(policy, "get_action") and not hasattr(policy, "infer"):
+                if args.data_config == "galbot":
+                    policy = GalbotPolicyAdapter(policy)
+                else:
+                    policy = Gr00tPolicyAdapter(policy)
 
             # Create and start WebSocket server
             server = WebsocketPolicyServer(
-                policy=adapted_policy,
+                policy=policy,
                 host=args.host,
                 port=args.port,
                 metadata={

@@ -1,13 +1,10 @@
 """
 Adapter to make GR00T policy compatible with WebSocket server/client interface.
 """
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 import numpy as np
 import torch
 from PIL import Image
-import mujoco
-
-from gr00t.eval.websocket.eef_policy_adapter import remap_qpos
 
 
 class Gr00tPolicyAdapter:
@@ -113,3 +110,101 @@ class Gr00tPolicyAdapter:
         """Reset the policy if needed."""
         if hasattr(self.policy, 'reset'):
             self.policy.reset()
+
+
+class GalbotPolicyAdapter:
+    """Adapts Gr00tPolicy to the Galbot client observation/action format.
+
+    Training keys (from your modality.json):
+    - video.front_head_left  -> observation.images.front_head_left
+    - state.qpos             -> observation.state[0:30]
+    - annotation.language.action_text (we treat it as free-form string at inference)
+
+    Output:
+    - left_arm, left_gripper, right_arm, right_gripper sliced from action.qpos
+    """
+
+    def __init__(self, policy: Any, *, default_task: str = "No task."):
+        self.policy = policy
+        self.default_task = default_task
+
+    @staticmethod
+    def _to_numpy(value) -> np.ndarray:
+        if isinstance(value, Image.Image):
+            return np.array(value)
+        if isinstance(value, torch.Tensor):
+            return value.detach().cpu().numpy()
+        if isinstance(value, np.ndarray):
+            return value
+        return np.array(value)
+
+    def _build_groot_obs(self, obs: Dict) -> Dict[str, np.ndarray]:
+        video = self._to_numpy(obs["pixels"]["head_left_rgb"])
+        if video.ndim == 3:
+            video = video[None, ...]  # (1,H,W,C) as T=1
+
+        # ---- language ----
+        lang = obs.get("task_description", None)
+        lang = [str(lang)]
+
+        # ---- state.qpos ----
+        waist_head = self._to_numpy(obs["state"]["waist_head"])
+        left_arm = self._to_numpy(obs["state"]["left_arm"])
+        left_gripper = self._to_numpy(obs["state"]["left_gripper"])
+        right_arm = self._to_numpy(obs["state"]["right_arm"])
+        right_gripper = self._to_numpy(obs["state"]["right_gripper"])
+        odom = self._to_numpy(obs["state"]["odom"])
+        qpos = np.concatenate([waist_head.reshape(-1), left_arm.reshape(-1), left_gripper.reshape(-1), right_arm.reshape(-1), right_gripper.reshape(-1), odom.reshape(-1)], axis=-1)
+        if qpos.ndim == 1:
+            qpos = qpos[None, :]  # (1,30) as T=1
+
+        return {
+            "video.front_head_left": video.astype(np.uint8, copy=False),
+            "state.qpos": qpos.astype(np.float32, copy=False),
+            "annotation.language.action_text": np.array(lang, dtype=object),
+        }
+
+    @staticmethod
+    def _slice_action_qpos(action_qpos: np.ndarray) -> Dict[str, np.ndarray]:
+        # action_qpos: (H, D) or (B, H, D)
+        if action_qpos.ndim == 2:
+            horizon, dim = action_qpos.shape
+            sl = slice(1, horizon)
+            chunk = action_qpos[sl]  # (n, D)
+            return {
+                "left_arm": chunk[:, 7:14],
+                "left_gripper": chunk[:, 14],
+                "right_arm": chunk[:, 15:22],
+                "right_gripper": chunk[:, 22],
+            }
+        if action_qpos.ndim == 3:
+            b, horizon, dim = action_qpos.shape
+            sl = slice(1, horizon)
+            chunk = action_qpos[:, sl]  # (B, n, D)
+            return {
+                "left_arm": chunk[:, :, 7:14],
+                "left_gripper": chunk[:, :, 14],
+                "right_arm": chunk[:, :, 15:22],
+                "right_gripper": chunk[:, :, 22],
+            }
+        raise ValueError(f"Unexpected action.qpos shape: {action_qpos.shape}")
+
+    def infer(self, obs_list: List[Dict]) -> Dict[str, np.ndarray]:
+        if not obs_list:
+            raise ValueError("obs_list is empty")
+
+        first = obs_list[0]
+        if isinstance(first, dict) and first.get("mode") == "reset":
+            if hasattr(self.policy, "reset"):
+                self.policy.reset()
+            return {}
+
+        obs = obs_list[-1]
+        groot_obs = self._build_groot_obs(obs)
+
+        action = self.policy.get_action(groot_obs)
+        if "action.qpos" not in action:
+            raise KeyError(f"Expected 'action.qpos' in policy output, got keys={list(action.keys())}")
+
+        action_qpos = self._to_numpy(action["action.qpos"])
+        return self._slice_action_qpos(action_qpos)
