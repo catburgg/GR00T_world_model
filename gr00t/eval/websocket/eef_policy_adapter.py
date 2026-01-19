@@ -1,13 +1,14 @@
 """
 EEF (End-Effector) Policy Adapter that converts between joint positions (qpos) and end-effector poses.
 """
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 import mujoco
 import numpy as np
 import robosuite.utils.transform_utils as T
 
-from gr00t.policy.gr00t_policy import Gr00tPolicy
+# NOTE: avoid importing gr00t.policy.* (not present in this repo layout).
+# We only need a duck-typed policy object with `get_action` / `modality_config` optionally.
 
 def rpy2mat(rpy):
     roll, pitch, yaw = rpy[0], rpy[1], rpy[2]
@@ -52,7 +53,7 @@ class EEFPolicyAdapter:
 
     def __init__(
         self,
-        policy: Gr00tPolicy,
+        policy: Any,
         model: mujoco.MjModel,
         data: mujoco.MjData,
         robot_config: Dict,

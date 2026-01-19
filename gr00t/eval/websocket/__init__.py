@@ -2,10 +2,10 @@
 
 from .server import WebsocketPolicyServer
 from .client import WebsocketClientPolicy
-from .policy_adapter import Gr00tPolicyAdapter
+# from .policy_adapter import Gr00tPolicyAdapter
 
 __all__ = [
     "WebsocketPolicyServer",
     "WebsocketClientPolicy", 
-    "Gr00tPolicyAdapter",
+    # "Gr00tPolicyAdapter",
 ]

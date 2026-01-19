@@ -52,7 +52,7 @@ import tyro
 from gr00t.data.embodiment_tags import EMBODIMENT_TAG_MAPPING
 from gr00t.eval.robot import RobotInferenceClient, RobotInferenceServer
 from gr00t.experiment.data_config import load_data_config
-from gr00t.model.policy import Gr00tPolicy
+# from gr00t.model.policy import Gr00tPolicy
 
 
 @dataclass
@@ -76,7 +76,7 @@ class ArgsConfig:
     port: int = 5555
     """The port number for the server."""
 
-    host: str = "localhost"
+    host: str = "0.0.0.0"
     """The host address for the server."""
 
     server: bool = False
@@ -170,31 +170,62 @@ def main(args: ArgsConfig):
         modality_config = data_config.modality_config()
         modality_transform = data_config.transform()
 
-        policy = Gr00tPolicy(
-            model_path=args.model_path,
-            modality_config=modality_config,
-            modality_transform=modality_transform,
-            embodiment_tag=args.embodiment_tag,
-            denoising_steps=args.denoising_steps,
-        )
+        # Only create a real GR00T model when we actually need it.
+        # For replay over websocket, we don't want to load the model.
+        policy = None
+        if not args.websocket_server:
+            from gr00t.model.policy import Gr00tPolicy  # local import to avoid heavy deps unless needed
+
+            policy = Gr00tPolicy(
+                model_path=args.model_path,
+                modality_config=modality_config,
+                modality_transform=modality_transform,
+                embodiment_tag=args.embodiment_tag,
+                denoising_steps=args.denoising_steps,
+            )
 
         # Start the server
         if args.http_server:
             from gr00t.eval.http_server import HTTPInferenceServer  # noqa: F401
 
+            assert policy is not None, "Internal error: policy must be created for http_server mode"
             server = HTTPInferenceServer(
                 policy, port=args.port, host=args.host, api_token=args.api_token
             )
             server.run()
         elif args.websocket_server:
             from gr00t.eval.websocket.server import WebsocketPolicyServer
-            from gr00t.eval.websocket.policy_adapter import Gr00tPolicyAdapter
+            from gr00t.eval.websocket.dummy_replay_adapter import DummyReplayPolicyAdapter
+            from gr00t.eval.websocket.eef_replay_adapter import EEFReplayPolicyAdapter
             
             print(f"Starting WebSocket server on {args.host}:{args.port}")
-            
-            # Wrap policy with adapter
-            adapted_policy = Gr00tPolicyAdapter(policy)
-            
+
+            # ------------------------------------------------------------
+            # Hard-coded replay policy (edit these paths for your dataset)
+            # ------------------------------------------------------------
+            PARQUET_PATH = "/mnt/project/world_model/data/RobotData/robocasa_1k_20hz/gr1_unified.PnPBottleToCabinetClose_GR1ArmsAndWaistFourierHands_1000/data/chunk-000/episode_000000.parquet"
+            MODALITY_JSON_PATH = "/mnt/project/world_model/data/RobotData/robocasa_1k_20hz/gr1_unified.PnPBottleToCabinetClose_GR1ArmsAndWaistFourierHands_1000/meta/modality.json"
+
+            # Choose ONE:
+            USE_EEF_REPLAY = True
+
+            if USE_EEF_REPLAY:
+                adapted_policy = EEFReplayPolicyAdapter(
+                    parquet_path=PARQUET_PATH,
+                    modality_json_path=MODALITY_JSON_PATH,
+                    # If your eef target should come from row t+1, set to 1.
+                    eef_target_offset=0,
+                    # Optional: override robot xml if needed
+                    robot_xml_path=None,
+                )
+            else:
+                adapted_policy = DummyReplayPolicyAdapter(
+                    parquet_path=PARQUET_PATH,
+                    modality_json_path=MODALITY_JSON_PATH,
+                    action_horizon=1,
+                    start_index=0,
+                )
+
             # Create and start WebSocket server
             server = WebsocketPolicyServer(
                 policy=adapted_policy,
@@ -209,6 +240,7 @@ def main(args: ArgsConfig):
             )
             server.serve_forever()
         else:
+            assert policy is not None, "Internal error: policy must be created for ZMQ server mode"
             server = RobotInferenceServer(policy, port=args.port, api_token=args.api_token)
             server.run()
 

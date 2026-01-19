@@ -1,13 +1,12 @@
 """
-Adapter to make Gr00tPolicy compatible with WebSocket server/client interface.
+Adapter to make GR00T policy compatible with WebSocket server/client interface.
 """
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 import numpy as np
 import torch
 from PIL import Image
 import mujoco
 
-from gr00t.policy.gr00t_policy import Gr00tPolicy
 from gr00t.eval.websocket.eef_policy_adapter import remap_qpos
 
 
@@ -38,7 +37,7 @@ class Gr00tPolicyAdapter:
         "action.waist": "action.waist",
     }
     
-    def __init__(self, policy: Gr00tPolicy):
+    def __init__(self, policy: Any):
         self.policy = policy
         self.modality_config = policy.modality_config
     
